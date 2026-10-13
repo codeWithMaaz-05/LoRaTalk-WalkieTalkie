@@ -1,0 +1,28 @@
+{
+  "name": "Codec2",
+  "version": "1.2.0",
+  "build": {
+    "flags": [
+      "-D__EMBEDDED__"
+    ],
+    "srcFilter": [
+      "-<*>",
+      "+<codec2.c>",
+      "+<codec2_fft.c>",
+      "+<lpc.c>",
+      "+<nlp.c>",
+      "+<postfilter.c>",
+      "+<sine.c>",
+      "+<kiss_fft.c>",
+      "+<kiss_fftr.c>",
+      "+<interp.c>",
+      "+<lsp.c>",
+      "+<mbest.c>",
+      "+<quantise.c>",
+      "+<pack.c>",
+      "+<codebook*.c>",
+      "+<newamp1.c>",
+      "+<phase.c>"
+    ]
+  }
+}

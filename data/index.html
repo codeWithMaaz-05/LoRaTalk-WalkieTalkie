@@ -1,0 +1,350 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>LoRa Walkie-Talkie</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;min-height:100dvh;background:#09111f;
+ color:#f1f5f9;font-family:system-ui,Arial,sans-serif;
+}
+.app{
+ max-width:460px;min-height:100dvh;margin:auto;
+ padding:25px 22px;display:flex;flex-direction:column;
+ align-items:center;text-align:center;
+}
+.header{width:100%;display:flex;justify-content:space-between;align-items:center}
+.brand{display:flex;align-items:center;gap:10px;font-size:19px;font-weight:800}
+.logo{
+ width:38px;height:38px;background:#2563eb;border-radius:12px;
+ display:grid;place-items:center;font-size:22px
+}
+.online{font-size:12px;color:#94a3b8}
+.online::before{content:"● ";color:#64748b}
+.online.connected::before{color:#22c55e}
+
+.device{
+ margin-top:32px;color:#94a3b8;font-size:13px;
+ letter-spacing:2px;font-weight:700
+}
+h1{font-size:29px;margin:7px 0 8px}
+.subtitle{color:#94a3b8;font-size:13px;margin:0}
+
+.state{
+ margin-top:30px;border:1px solid #334155;
+ background:#111e31;border-radius:18px;
+ padding:19px;width:100%;
+}
+.state-title{font-size:19px;font-weight:800}
+.state-desc{color:#94a3b8;font-size:13px;margin-top:6px}
+.state.ready .state-title{color:#4ade80}
+.state.tx .state-title{color:#fb7185}
+.state.busy .state-title{color:#fbbf24}
+.state.offline .state-title{color:#94a3b8}
+
+.ptt-wrap{
+ flex:1;display:flex;flex-direction:column;
+ justify-content:center;align-items:center;
+ min-height:290px;width:100%
+}
+#ptt{
+ width:220px;height:220px;border-radius:50%;
+ border:8px solid #1e3a5f;background:#2563eb;
+ color:white;font-size:19px;font-weight:800;
+ display:none;flex-direction:column;
+ justify-content:center;align-items:center;
+ gap:12px;touch-action:none;user-select:none;
+ -webkit-user-select:none;cursor:pointer;
+ box-shadow:0 0 0 10px rgba(37,99,235,.09);
+}
+#ptt svg{width:42px;height:42px}
+#ptt.active{background:#dc2626;border-color:#7f1d1d}
+#ptt.busy{
+ background:#334155;border-color:#475569;
+ color:#94a3b8;box-shadow:none;cursor:not-allowed
+}
+#ptt:disabled{opacity:.7}
+.hint{font-size:13px;color:#94a3b8;margin-top:25px}
+
+#start{
+ margin:auto;background:#2563eb;color:white;border:0;
+ border-radius:15px;padding:19px 34px;
+ font-size:18px;font-weight:700;cursor:pointer
+}
+
+.metrics{
+ width:100%;display:grid;grid-template-columns:1fr 1fr;
+ gap:10px;margin-bottom:18px
+}
+.metric{
+ background:#111e31;border:1px solid #26354a;
+ padding:16px 10px;border-radius:15px
+}
+.value{font-size:22px;font-weight:800}
+.label{font-size:11px;color:#94a3b8;margin-top:5px}
+.footer{
+ color:#64748b;font-size:11px;
+ margin:8px 0 4px;line-height:1.6
+}
+</style>
+</head>
+
+<body>
+<div class="app">
+
+ <div class="header">
+  <div class="brand">
+   <div class="logo">📻</div>
+   <span>LoRaTalk</span>
+  </div>
+  <div id="online" class="online">Offline</div>
+ </div>
+
+ <div class="device" id="device">ESP32 + SX1262</div>
+ <h1>Walkie-Talkie</h1>
+ <p class="subtitle">Secure local radio link · Half-duplex PTT</p>
+
+ <div id="state" class="state offline">
+  <div id="stateTitle" class="state-title">NOT CONNECTED</div>
+  <div id="stateDesc" class="state-desc">Tap Start audio to begin</div>
+ </div>
+
+ <div class="ptt-wrap">
+  <button id="start">Start audio</button>
+
+  <button id="ptt" disabled>
+   <svg viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round">
+    <rect x="9" y="2" width="6" height="12" rx="3"/>
+    <path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/>
+   </svg>
+   <span id="pttText">HOLD TO TALK</span>
+  </button>
+
+  <div id="hint" class="hint">One person talks at a time</div>
+ </div>
+
+ <div class="metrics">
+  <div class="metric">
+   <div id="rx" class="value">0</div>
+   <div class="label">RX PACKETS</div>
+  </div>
+  <div class="metric">
+   <div id="tx" class="value">0</div>
+   <div class="label">TX PACKETS</div>
+  </div>
+  <div class="metric">
+   <div id="rssi" class="value">--</div>
+   <div class="label">RSSI (dBm)</div>
+  </div>
+  <div class="metric">
+   <div id="snr" class="value">--</div>
+   <div class="label">SNR (dB)</div>
+  </div>
+ </div>
+
+ <div class="footer">
+  ESP32 · SX1262 · Codec2 · Wi-Fi WebSocket<br>
+  Experimental LoRa voice communication
+ </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+let ws,ctx,capture,player;
+let started=false;
+let talking=false;
+let connected=false;
+let remoteBusy=false;
+let remoteOwner=null;
+
+function showState(type,title,description){
+ $('state').className='state '+type;
+ $('stateTitle').textContent=title;
+ $('stateDesc').textContent=description;
+}
+
+function refreshUI(){
+ const ptt=$('ptt');
+ const locked=remoteBusy&&!talking;
+
+ ptt.disabled=!connected||locked||!started;
+ ptt.classList.toggle('busy',locked);
+ ptt.classList.toggle('active',talking);
+
+ $('online').textContent=connected?'Connected':'Offline';
+ $('online').classList.toggle('connected',connected);
+
+ if(talking){
+  showState('tx','TRANSMITTING','Your microphone is live');
+  $('pttText').textContent='TALKING';
+  $('hint').textContent='Release to finish';
+ }else if(locked){
+  showState('busy','CHANNEL BUSY',
+   remoteOwner!==null?'Node '+remoteOwner+' is talking':'Other radio is talking');
+  $('pttText').textContent='LOCKED';
+  $('hint').textContent='Wait for the other person to finish';
+ }else if(connected){
+  showState('ready','READY TO TALK','Channel available');
+  $('pttText').textContent='HOLD TO TALK';
+  $('hint').textContent='Press and hold to transmit';
+ }else{
+  showState('offline','DISCONNECTED','Waiting for radio connection');
+  $('pttText').textContent='OFFLINE';
+  $('hint').textContent='Connecting...';
+ }
+}
+
+$('start').onclick=async()=>{
+ try{
+  if(!navigator.mediaDevices?.getUserMedia||!window.AudioWorklet)
+   throw new Error('Microphone needs secure browser origin');
+
+  ctx=new AudioContext({sampleRate:8000});
+  await ctx.resume();
+
+  if(ctx.sampleRate!==8000)
+   throw new Error('8 kHz audio unavailable: '+ctx.sampleRate);
+
+  await ctx.audioWorklet.addModule('/pcm-capture.js');
+  await ctx.audioWorklet.addModule('/pcm-play.js');
+
+  const mic=await navigator.mediaDevices.getUserMedia({
+   audio:{
+    channelCount:1,
+    echoCancellation:true,
+    noiseSuppression:true,
+    autoGainControl:true
+   }
+  });
+
+  capture=new AudioWorkletNode(ctx,'pcm-capture');
+  player=new AudioWorkletNode(ctx,'pcm-play');
+
+  const src=ctx.createMediaStreamSource(mic);
+  const silent=ctx.createGain();
+  silent.gain.value=0;
+
+  src.connect(capture);
+  capture.connect(silent);
+  silent.connect(ctx.destination);
+  player.connect(ctx.destination);
+
+  capture.port.onmessage=e=>{
+   if(talking&&ws?.readyState===WebSocket.OPEN&&ws.bufferedAmount<4096)
+    ws.send(e.data);
+  };
+
+  started=true;
+  $('start').style.display='none';
+  $('ptt').style.display='flex';
+
+  connect();
+  refreshUI();
+
+ }catch(e){
+  showState('offline','START ERROR',e.message);
+  console.error(e);
+ }
+};
+
+function handleStatus(s){
+ if(typeof s.rx==='number')$('rx').textContent=s.rx;
+ if(typeof s.tx==='number')$('tx').textContent=s.tx;
+ if(typeof s.rssi==='number')$('rssi').textContent=s.rssi.toFixed(0);
+ if(typeof s.snr==='number')$('snr').textContent=s.snr.toFixed(1);
+
+ // Accept explicit busy state from the ESP32.
+ // This must come from the radio firmware, not local guesses.
+ if(typeof s.remoteBusy==='boolean'){
+  remoteBusy=s.remoteBusy;
+  remoteOwner=s.remoteBusy?(s.owner??null):null;
+  if(remoteBusy&&talking)release();
+  refreshUI();
+ }
+
+ // Also support a channel-state message.
+ if(s.type==='channel'){
+  remoteBusy=s.busy===true;
+  remoteOwner=s.owner??null;
+  if(remoteBusy&&talking)release();
+  refreshUI();
+ }
+}
+
+function connect(){
+ ws=new WebSocket('ws://'+location.host+'/audio');
+ ws.binaryType='arraybuffer';
+
+ ws.onopen=()=>{
+  connected=true;
+  refreshUI();
+ };
+
+ ws.onclose=()=>{
+  connected=false;
+  remoteBusy=false;
+  release();
+  refreshUI();
+  if(started)setTimeout(connect,1500);
+ };
+
+ ws.onerror=()=>{
+  connected=false;
+  refreshUI();
+ };
+
+ ws.onmessage=e=>{
+  if(typeof e.data==='string'){
+   try{handleStatus(JSON.parse(e.data));}
+   catch(err){console.log('Status parse error',err);}
+  }else if(player){
+   player.port.postMessage(e.data,[e.data]);
+  }
+ };
+}
+
+function press(e){
+ e.preventDefault();
+
+ if(!started||!connected||remoteBusy||talking)return;
+ if(ws?.readyState!==WebSocket.OPEN)return;
+
+ ctx.resume();
+
+ $('ptt').setPointerCapture(e.pointerId);
+ talking=true;
+ ws.send('PTT1');
+ capture.port.postMessage('ON');
+
+ refreshUI();
+}
+
+function release(){
+ if(!talking)return;
+ talking=false;
+ capture?.port.postMessage('OFF');
+
+ if(ws?.readyState===WebSocket.OPEN)
+  ws.send('PTT0');
+
+ refreshUI();
+}
+
+$('ptt').addEventListener('pointerdown',press);
+$('ptt').addEventListener('pointerup',release);
+$('ptt').addEventListener('pointercancel',release);
+$('ptt').addEventListener('lostpointercapture',release);
+
+document.addEventListener('visibilitychange',()=>{
+ if(document.hidden)release();
+});
+</script>
+</body>
+</html>
